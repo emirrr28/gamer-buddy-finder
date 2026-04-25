@@ -3,21 +3,34 @@
 import {
   Check,
   ChevronRight,
+  Clock3,
   Gamepad2,
   HeartHandshake,
   MessageCircle,
   Mic,
   Plus,
+  RotateCcw,
   Send,
   Settings2,
+  ShieldCheck,
   Swords,
   Users,
   X
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 type Language = "en" | "tr";
 type Tab = "onboarding" | "discover" | "matches" | "lobbies";
+type Decision = "passed" | "liked" | "matched";
+type Message = { from: "me" | "them"; text: string };
+
+type UserPreferences = {
+  games: string[];
+  platforms: string[];
+  styles: string[];
+  voice: string[];
+  hours: string[];
+};
 
 type Player = {
   id: number;
@@ -33,11 +46,27 @@ type Player = {
   mic: boolean;
   active: string;
   bio: string;
-  compatibility: number;
+  likedYou: boolean;
+  preferredModes: string[];
+  languages: string[];
+  voicePreference: string;
+  availabilityWindow: string;
+  personalityTags: string[];
 };
 
-type Match = Player & {
-  messages: { from: "me" | "them"; text: string }[];
+type ScoredPlayer = Player & {
+  score: number;
+  reasons: string[];
+};
+
+type Match = {
+  playerId: number;
+  messages: Message[];
+};
+
+type HandoffLinks = {
+  discord: string;
+  steam: string;
 };
 
 type Lobby = {
@@ -52,20 +81,44 @@ type Lobby = {
   size: number;
   members: string[];
   status: "open" | "ready" | "successful";
+  createdAt: number;
+  readyStartedAt: number | null;
+  expiresInSeconds: number;
+  handoffLinks: HandoffLinks;
+  activity: string;
+  fitScore: number;
+  feedback?: string;
 };
+
+type ScoredLobby = Lobby & {
+  fitScore: number;
+  fitReasons: string[];
+};
+
+type PersistedState = {
+  language: Language;
+  tab: Tab;
+  preferences: UserPreferences;
+  decisions: Record<number, Decision>;
+  matches: Match[];
+  lobbies: Lobby[];
+};
+
+const STORAGE_KEY = "queue.productLoop.v2";
+const READY_ROOM_SECONDS = 90;
 
 const copy = {
   en: {
     railTitle: "Queue",
-    railText: "A clean way to find people for the games that get better with a squad.",
+    railText: "A cleaner way to find people for the games that get better with a squad.",
     activeRooms: "live rooms",
     matchesToday: "matches today",
     onboarding: "Profile",
     discover: "Discover",
     matches: "Matches",
     lobbies: "Lobbies",
-    onboardingKicker: "Tune the signal before the app starts matching.",
-    discoverKicker: "Swipe for teammates, not awkward small talk.",
+    onboardingKicker: "Your choices now change who rises to the top.",
+    discoverKicker: "Compatibility is based on your actual queue habits.",
     matchesKicker: "Mutual interest becomes a useful chat.",
     lobbiesKicker: "Short-lived rooms for tonight's queue.",
     games: "Games",
@@ -76,15 +129,18 @@ const copy = {
     startMatching: "Start matching",
     reject: "Pass",
     accept: "Queue up",
-    matchMade: "Match opened. Chat is ready.",
+    matched: "Match opened. Chat is ready.",
+    pending: "Like sent. Waiting on their swipe.",
+    passed: "Passed. The deck moved on.",
     sharedGames: "Shared games",
     rank: "Rank",
     platform: "Platform",
     active: "Active",
     vibe: "Vibe",
     mic: "Mic",
-    noMore: "No more profiles in this demo.",
+    noMore: "No more profiles in this deck.",
     resetDeck: "Reset deck",
+    resetDemo: "Reset demo",
     typeMessage: "Send a game plan...",
     lobbyCreate: "Create lobby",
     join: "Join",
@@ -100,7 +156,29 @@ const copy = {
     create: "Create",
     lobbyTitle: "Lobby title",
     emptyMatches: "Swipe right on a compatible player to open a chat.",
-    emptyLobbies: "No open lobbies yet."
+    emptyLobbies: "No open lobbies yet.",
+    matchReasonGame: "shared game",
+    matchReasonPlatform: "same platform",
+    matchReasonVoice: "voice fit",
+    matchReasonStyle: "style fit",
+    matchReasonTime: "same hours",
+    likedYou: "liked you",
+    instantMatch: "Instant match",
+    waiting: "Waiting",
+    pendingLikes: "Pending likes",
+    openChats: "Open chats",
+    fit: "fit",
+    readyIn: "handoff window",
+    expiresSoon: "Room window",
+    discord: "Discord",
+    steam: "Steam",
+    ownerOnly: "Waiting for lobby owner",
+    successFeedback: "Good session logged. This room can close cleanly.",
+    addMessage: "Send",
+    lobbyActivity: "Activity",
+    whyThis: "Why this match",
+    handoffCopy: "Add each other, pick voice, then leave the app cleanly.",
+    saved: "Saved locally"
   },
   tr: {
     railTitle: "Queue",
@@ -111,8 +189,8 @@ const copy = {
     discover: "Keşfet",
     matches: "Eşleşmeler",
     lobbies: "Lobiler",
-    onboardingKicker: "Eşleşme başlamadan önce sinyali ayarla.",
-    discoverKicker: "Garip sohbet için değil, takım arkadaşı için kaydır.",
+    onboardingKicker: "Seçimlerin artık kimin öne çıkacağını değiştiriyor.",
+    discoverKicker: "Uyum, gerçek oyun alışkanlıklarına göre hesaplanıyor.",
     matchesKicker: "Karşılıklı ilgi kullanışlı bir sohbete dönüşür.",
     lobbiesKicker: "Bu akşamki sıra için kısa ömürlü odalar.",
     games: "Oyunlar",
@@ -123,15 +201,18 @@ const copy = {
     startMatching: "Eşleşmeye başla",
     reject: "Geç",
     accept: "Sıraya al",
-    matchMade: "Eşleşme açıldı. Sohbet hazır.",
+    matched: "Eşleşme açıldı. Sohbet hazır.",
+    pending: "Beğeni gönderildi. Karşı tarafın kaydırması bekleniyor.",
+    passed: "Geçildi. Deste ilerledi.",
     sharedGames: "Ortak oyunlar",
     rank: "Rank",
     platform: "Platform",
     active: "Aktif",
     vibe: "Tarz",
     mic: "Mikrofon",
-    noMore: "Bu demoda başka profil kalmadı.",
+    noMore: "Bu destede başka profil kalmadı.",
     resetDeck: "Desteyi sıfırla",
+    resetDemo: "Demoyu sıfırla",
     typeMessage: "Oyun planı yaz...",
     lobbyCreate: "Lobi oluştur",
     join: "Katıl",
@@ -147,8 +228,46 @@ const copy = {
     create: "Oluştur",
     lobbyTitle: "Lobi başlığı",
     emptyMatches: "Sohbet açmak için uyumlu bir oyuncuyu sağa kaydır.",
-    emptyLobbies: "Henüz açık lobi yok."
+    emptyLobbies: "Henüz açık lobi yok.",
+    matchReasonGame: "ortak oyun",
+    matchReasonPlatform: "aynı platform",
+    matchReasonVoice: "ses uyumu",
+    matchReasonStyle: "tarz uyumu",
+    matchReasonTime: "aynı saatler",
+    likedYou: "seni beğendi",
+    instantMatch: "Anında eşleşme",
+    waiting: "Beklemede",
+    pendingLikes: "Bekleyen beğeniler",
+    openChats: "Açık sohbetler",
+    fit: "uyum",
+    readyIn: "handoff süresi",
+    expiresSoon: "Oda süresi",
+    discord: "Discord",
+    steam: "Steam",
+    ownerOnly: "Lobi sahibinin kapatması bekleniyor",
+    successFeedback: "İyi oyun kaydedildi. Bu oda temizce kapanabilir.",
+    addMessage: "Gönder",
+    lobbyActivity: "Aktivite",
+    whyThis: "Neden uyuyor",
+    handoffCopy: "Birbirinizi ekleyin, sesi seçin ve uygulamadan temizce çıkın.",
+    saved: "Yerelde kaydedildi"
   }
+};
+
+const choices = {
+  games: ["Valorant", "CS2", "League", "Apex", "Helldivers 2", "Dota 2"],
+  platforms: ["PC", "Steam", "Riot", "Discord", "PlayStation", "Xbox"],
+  styles: ["Competitive", "Casual", "Ranked", "Co-op", "Late night"],
+  voice: ["Mic on", "Text first", "Either"],
+  hours: ["18:00 - 22:00", "20:00 - 00:00", "22:00 - 02:00"]
+};
+
+const defaultPreferences: UserPreferences = {
+  games: ["Valorant", "CS2"],
+  platforms: ["PC", "Steam", "Discord"],
+  styles: ["Competitive", "Ranked", "Late night"],
+  voice: ["Mic on"],
+  hours: ["20:00 - 00:00"]
 };
 
 const players: Player[] = [
@@ -165,8 +284,13 @@ const players: Player[] = [
     vibe: "Calm shotcaller",
     mic: true,
     active: "21:00 - 01:00",
-    bio: "Plays ranked seriously, keeps comms short, never tilts in round three.",
-    compatibility: 94
+    bio: "Ranked seriously, comms short, no round-three tilt.",
+    likedYou: true,
+    preferredModes: ["Competitive", "Ranked", "Late night"],
+    languages: ["TR", "EN"],
+    voicePreference: "Mic on",
+    availabilityWindow: "20:00 - 00:00",
+    personalityTags: ["short comms", "clutch calm", "no blame"]
   },
   {
     id: 2,
@@ -181,8 +305,13 @@ const players: Player[] = [
     vibe: "Objective first",
     mic: true,
     active: "20:30 - 00:30",
-    bio: "Looking for people who can lose one match without making it weird.",
-    compatibility: 89
+    bio: "Wants people who can lose one match without making it weird.",
+    likedYou: false,
+    preferredModes: ["Competitive", "Co-op", "Ranked"],
+    languages: ["TR", "EN"],
+    voicePreference: "Mic on",
+    availabilityWindow: "20:00 - 00:00",
+    personalityTags: ["objective first", "utility calls", "stable stack"]
   },
   {
     id: 3,
@@ -197,8 +326,13 @@ const players: Player[] = [
     vibe: "Chill competitive",
     mic: false,
     active: "18:00 - 23:00",
-    bio: "Queue partner for ranked nights, cozy servers on slow weekends.",
-    compatibility: 82
+    bio: "Ranked on weeknights, cozy servers when the lobby slows down.",
+    likedYou: true,
+    preferredModes: ["Casual", "Ranked", "Co-op"],
+    languages: ["TR"],
+    voicePreference: "Text first",
+    availabilityWindow: "18:00 - 22:00",
+    personalityTags: ["patient", "macro focused", "low pressure"]
   },
   {
     id: 4,
@@ -213,76 +347,119 @@ const players: Player[] = [
     vibe: "Tactical and patient",
     mic: true,
     active: "22:00 - 02:00",
-    bio: "Prefers stable groups, clean calls, and no blame spirals.",
-    compatibility: 77
+    bio: "Stable groups, clean calls, and no blame spirals.",
+    likedYou: false,
+    preferredModes: ["Competitive", "Late night"],
+    languages: ["TR"],
+    voicePreference: "Mic on",
+    availabilityWindow: "22:00 - 02:00",
+    personalityTags: ["tactical", "slow rounds", "late queue"]
+  },
+  {
+    id: 5,
+    name: "Noah",
+    age: 25,
+    city: "Berlin",
+    initials: "NH",
+    accent: "#6b5f4a",
+    games: ["Apex", "Valorant", "CS2"],
+    rank: "Diamond",
+    platform: "Discord",
+    vibe: "Fast reset",
+    mic: true,
+    active: "20:00 - 00:00",
+    bio: "Likes quick rematches, clear roles, and one clean warm-up.",
+    likedYou: false,
+    preferredModes: ["Competitive", "Ranked"],
+    languages: ["EN"],
+    voicePreference: "Mic on",
+    availabilityWindow: "20:00 - 00:00",
+    personalityTags: ["fast reset", "entry flex", "warm-up first"]
   }
 ];
 
-const initialLobbies: Lobby[] = [
-  {
-    id: 101,
-    title: "Clean CS2 five-stack",
-    game: "CS2",
-    mode: "Premier",
-    rank: "Gold Nova - MG",
-    language: "TR/EN",
-    mic: true,
-    owner: "Deniz",
-    size: 5,
-    members: ["Deniz", "Mira", "Ece"],
-    status: "open"
-  },
-  {
-    id: 102,
-    title: "Valorant late queue",
-    game: "Valorant",
-    mode: "Ranked",
-    rank: "Diamond - Ascendant",
-    language: "EN",
-    mic: true,
-    owner: "Mira",
-    size: 5,
-    members: ["Mira", "Noah", "Kai", "You"],
-    status: "open"
-  },
-  {
-    id: 103,
-    title: "Helldivers quick run",
-    game: "Helldivers 2",
-    mode: "Suicide Mission",
-    rank: "Any",
-    language: "TR",
-    mic: false,
-    owner: "Aras",
-    size: 4,
-    members: ["Aras", "Selin", "You", "Can"],
-    status: "ready"
-  }
-];
+function makeInitialLobbies(now: number): Lobby[] {
+  return [
+    {
+      id: 101,
+      title: "Clean CS2 five-stack",
+      game: "CS2",
+      mode: "Premier",
+      rank: "Gold Nova - MG",
+      language: "TR/EN",
+      mic: true,
+      owner: "Deniz",
+      size: 5,
+      members: ["Deniz", "Mira", "Ece"],
+      status: "open",
+      createdAt: now - 12 * 60 * 1000,
+      readyStartedAt: null,
+      expiresInSeconds: READY_ROOM_SECONDS,
+      handoffLinks: {
+        discord: "discord.gg/clean-stack",
+        steam: "steamcommunity.com/groups/cleanstack"
+      },
+      activity: "Needs two stable riflers",
+      fitScore: 0
+    },
+    {
+      id: 102,
+      title: "Valorant late queue",
+      game: "Valorant",
+      mode: "Ranked",
+      rank: "Diamond - Ascendant",
+      language: "EN",
+      mic: true,
+      owner: "Mira",
+      size: 5,
+      members: ["Mira", "Noah", "Kai", "Jules"],
+      status: "open",
+      createdAt: now - 7 * 60 * 1000,
+      readyStartedAt: null,
+      expiresInSeconds: READY_ROOM_SECONDS,
+      handoffLinks: {
+        discord: "discord.gg/late-queue",
+        steam: "riot id: mira#queue"
+      },
+      activity: "One flex player for ranked",
+      fitScore: 0
+    },
+    {
+      id: 103,
+      title: "Helldivers quick run",
+      game: "Helldivers 2",
+      mode: "Suicide Mission",
+      rank: "Any",
+      language: "TR",
+      mic: false,
+      owner: "You",
+      size: 4,
+      members: ["You", "Aras", "Selin", "Can"],
+      status: "ready",
+      createdAt: now - 4 * 60 * 1000,
+      readyStartedAt: now - 22 * 1000,
+      expiresInSeconds: READY_ROOM_SECONDS,
+      handoffLinks: {
+        discord: "discord.gg/drop-now",
+        steam: "steam friend code: 8842-1190"
+      },
+      activity: "Squad is ready to jump",
+      fitScore: 0
+    }
+  ];
+}
 
-const choices = {
-  games: ["Valorant", "CS2", "League", "Apex", "Helldivers 2", "Dota 2"],
-  platforms: ["Steam", "Riot", "Discord", "PlayStation", "Xbox"],
-  styles: ["Competitive", "Casual", "Ranked", "Co-op", "Late night"],
-  voice: ["Mic on", "Text first", "Either"],
-  hours: ["18:00 - 22:00", "20:00 - 00:00", "22:00 - 02:00"]
-};
+const emptyLobbies = makeInitialLobbies(0);
 
 export default function Home() {
   const [language, setLanguage] = useState<Language>("en");
   const t = copy[language];
   const [tab, setTab] = useState<Tab>("onboarding");
-  const [deckIndex, setDeckIndex] = useState(0);
+  const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
+  const [decisions, setDecisions] = useState<Record<number, Decision>>({});
   const [matches, setMatches] = useState<Match[]>([]);
-  const [lobbies, setLobbies] = useState<Lobby[]>(initialLobbies);
+  const [lobbies, setLobbies] = useState<Lobby[]>(emptyLobbies);
   const [notice, setNotice] = useState("");
-  const [selected, setSelected] = useState({
-    games: ["Valorant", "CS2"],
-    platforms: ["Steam", "Discord"],
-    styles: ["Competitive", "Late night"],
-    voice: ["Mic on"],
-    hours: ["20:00 - 00:00"]
-  });
   const [draftLobby, setDraftLobby] = useState({
     title: "Tonight ranked stack",
     game: "CS2",
@@ -291,8 +468,87 @@ export default function Home() {
     size: 5,
     language: "TR/EN"
   });
+  const [messageDrafts, setMessageDrafts] = useState<Record<number, string>>({});
+  const [hydrated, setHydrated] = useState(false);
+  const [now, setNow] = useState<number | null>(null);
 
-  const currentPlayer = players[deckIndex];
+  /* eslint-disable react-hooks/set-state-in-effect -- localStorage hydration syncs client-only state after mount. */
+  useEffect(() => {
+    const timestamp = Date.now();
+
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as Partial<PersistedState>;
+        setLanguage(parsed.language ?? "en");
+        setTab(parsed.tab ?? "onboarding");
+        setPreferences(parsed.preferences ?? defaultPreferences);
+        setDecisions(parsed.decisions ?? {});
+        setMatches(parsed.matches ?? []);
+        setLobbies(parsed.lobbies ?? makeInitialLobbies(timestamp));
+      } else {
+        setLobbies(makeInitialLobbies(timestamp));
+      }
+    } catch {
+      setLobbies(makeInitialLobbies(timestamp));
+    }
+
+    setHydrated(true);
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const payload: PersistedState = {
+      language,
+      tab,
+      preferences,
+      decisions,
+      matches,
+      lobbies
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }, [decisions, hydrated, language, lobbies, matches, preferences, tab]);
+
+  const scoredPlayers = useMemo(
+    () =>
+      players
+        .map((player) => scorePlayer(player, preferences, t))
+        .sort((a, b) => b.score - a.score),
+    [preferences, t]
+  );
+
+  const currentDeck = scoredPlayers.filter((player) => !decisions[player.id]);
+  const currentPlayer = currentDeck[0];
+
+  const matchedPlayers = matches
+    .map((match) => {
+      const player = players.find((candidate) => candidate.id === match.playerId);
+      return player ? { ...scorePlayer(player, preferences, t), messages: match.messages } : null;
+    })
+    .filter((match): match is ScoredPlayer & { messages: Message[] } => Boolean(match));
+
+  const pendingPlayers = scoredPlayers.filter((player) => decisions[player.id] === "liked");
+
+  const scoredLobbies = useMemo(
+    () =>
+      lobbies
+        .map((lobby) => scoreLobby(lobby, preferences, t))
+        .sort((a, b) => {
+          const statusWeight = { ready: 3, open: 2, successful: 1 };
+          return statusWeight[b.status] - statusWeight[a.status] || b.fitScore - a.fitScore;
+        }),
+    [lobbies, preferences, t]
+  );
+
   const liveLobbyCount = lobbies.filter((lobby) => lobby.status !== "successful").length;
 
   const screenMeta = useMemo(() => {
@@ -311,14 +567,20 @@ export default function Home() {
     return { title: titleByTab[tab], kicker: kickerByTab[tab] };
   }, [t, tab]);
 
-  function toggleChoice(group: keyof typeof selected, value: string) {
-    setSelected((current) => {
+  function updateTab(nextTab: Tab) {
+    setTab(nextTab);
+  }
+
+  function toggleChoice(group: keyof UserPreferences, value: string) {
+    setPreferences((current) => {
       const isSelected = current[group].includes(value);
+      const nextValues = isSelected
+        ? current[group].filter((item) => item !== value)
+        : [...current[group], value];
+
       return {
         ...current,
-        [group]: isSelected
-          ? current[group].filter((item) => item !== value)
-          : [...current[group], value]
+        [group]: nextValues.length > 0 ? nextValues : current[group]
       };
     });
   }
@@ -326,67 +588,104 @@ export default function Home() {
   function swipe(accepted: boolean) {
     if (!currentPlayer) return;
 
-    if (accepted) {
-      const matchExists = matches.some((match) => match.id === currentPlayer.id);
-      if (!matchExists) {
-        setMatches((current) => [
-          ...current,
-          {
-            ...currentPlayer,
-            messages: [
-              {
-                from: "them",
-                text: "I am queueing later tonight. Want to lock a game first?"
-              },
-              {
-                from: "me",
-                text: "Works for me. Let's pick the least chaotic option."
-              }
-            ]
-          }
-        ]);
-      }
-      setNotice(t.matchMade);
-    } else {
-      setNotice("");
+    if (!accepted) {
+      setDecisions((current) => ({ ...current, [currentPlayer.id]: "passed" }));
+      setNotice(t.passed);
+      return;
     }
 
-    setDeckIndex((current) => current + 1);
+    if (currentPlayer.likedYou) {
+      setDecisions((current) => ({ ...current, [currentPlayer.id]: "matched" }));
+      setMatches((current) =>
+        current.some((match) => match.playerId === currentPlayer.id)
+          ? current
+          : [
+              ...current,
+              {
+                playerId: currentPlayer.id,
+                messages: [
+                  {
+                    from: "them",
+                    text: "I am queueing later tonight. Want to lock a game first?"
+                  },
+                  {
+                    from: "me",
+                    text: "Works for me. Let's pick the least chaotic option."
+                  }
+                ]
+              }
+            ]
+      );
+      setNotice(t.matched);
+      return;
+    }
+
+    setDecisions((current) => ({ ...current, [currentPlayer.id]: "liked" }));
+    setNotice(t.pending);
   }
 
   function resetDeck() {
-    setDeckIndex(0);
+    setDecisions({});
+    setMatches([]);
+    setMessageDrafts({});
     setNotice("");
   }
 
+  function resetDemo() {
+    const timestamp = now ?? 1;
+    setLanguage("en");
+    setTab("onboarding");
+    setPreferences(defaultPreferences);
+    setDecisions({});
+    setMatches([]);
+    setMessageDrafts({});
+    setLobbies(makeInitialLobbies(timestamp));
+    setNotice("");
+    setNow(timestamp);
+    window.localStorage.removeItem(STORAGE_KEY);
+  }
+
   function createLobby() {
+    const timestamp = now ?? 1;
     const nextLobby: Lobby = {
-      id: Date.now(),
-      title: draftLobby.title,
+      id: timestamp,
+      title: draftLobby.title.trim() || "Tonight ranked stack",
       game: draftLobby.game,
-      mode: draftLobby.mode,
-      rank: draftLobby.rank,
+      mode: draftLobby.mode.trim() || "Ranked",
+      rank: draftLobby.rank.trim() || "Any",
       language: draftLobby.language,
-      mic: true,
+      mic: preferences.voice.includes("Mic on"),
       owner: "You",
       size: Number(draftLobby.size),
       members: ["You"],
-      status: "open"
+      status: Number(draftLobby.size) === 1 ? "ready" : "open",
+      createdAt: timestamp,
+      readyStartedAt: Number(draftLobby.size) === 1 ? timestamp : null,
+      expiresInSeconds: READY_ROOM_SECONDS,
+      handoffLinks: {
+        discord: "discord.gg/your-room",
+        steam: "steam friend code: add-yours"
+      },
+      activity: "Owner is holding the room",
+      fitScore: 100
     };
     setLobbies((current) => [nextLobby, ...current]);
   }
 
   function joinLobby(id: number) {
+    const timestamp = now ?? 1;
     setLobbies((current) =>
       current.map((lobby) => {
         if (lobby.id !== id || lobby.members.includes("You") || lobby.status === "successful") {
           return lobby;
         }
         const members = [...lobby.members, "You"];
+        const isReady = members.length >= lobby.size;
         return {
           ...lobby,
           members,
-          status: members.length >= lobby.size ? "ready" : "open"
+          status: isReady ? "ready" : "open",
+          readyStartedAt: isReady ? timestamp : lobby.readyStartedAt
         };
       })
     );
@@ -395,9 +694,30 @@ export default function Home() {
   function markSuccessful(id: number) {
     setLobbies((current) =>
       current.map((lobby) =>
-        lobby.id === id ? { ...lobby, status: "successful" } : lobby
+        lobby.id === id
+          ? {
+              ...lobby,
+              status: "successful",
+              feedback: t.successFeedback
+            }
+          : lobby
       )
     );
+  }
+
+  function sendMessage(playerId: number, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const draft = messageDrafts[playerId]?.trim();
+    if (!draft) return;
+
+    setMatches((current) =>
+      current.map((match) =>
+        match.playerId === playerId
+          ? { ...match, messages: [...match.messages, { from: "me", text: draft }] }
+          : match
+      )
+    );
+    setMessageDrafts((current) => ({ ...current, [playerId]: "" }));
   }
 
   return (
@@ -414,7 +734,7 @@ export default function Home() {
             <span>{t.activeRooms}</span>
           </div>
           <div className="stat">
-            <strong>{matches.length}</strong>
+            <strong>{matchedPlayers.length}</strong>
             <span>{t.matchesToday}</span>
           </div>
         </div>
@@ -426,65 +746,75 @@ export default function Home() {
             <h2 className="screen-title">{screenMeta.title}</h2>
             <p className="screen-kicker">{screenMeta.kicker}</p>
           </div>
-          <div className="lang-toggle" aria-label="Language">
-            <button
-              className={language === "en" ? "active" : ""}
-              onClick={() => setLanguage("en")}
-              type="button"
-            >
-              EN
+          <div className="top-actions">
+            <span className="save-state">
+              <ShieldCheck size={14} />
+              {t.saved}
+            </span>
+            <button className="reset-button" onClick={resetDemo} type="button">
+              <RotateCcw size={15} />
+              {t.resetDemo}
             </button>
-            <button
-              className={language === "tr" ? "active" : ""}
-              onClick={() => setLanguage("tr")}
-              type="button"
-            >
-              TR
-            </button>
+            <div className="lang-toggle" aria-label="Language">
+              <button
+                className={language === "en" ? "active" : ""}
+                onClick={() => setLanguage("en")}
+                type="button"
+              >
+                EN
+              </button>
+              <button
+                className={language === "tr" ? "active" : ""}
+                onClick={() => setLanguage("tr")}
+                type="button"
+              >
+                TR
+              </button>
+            </div>
           </div>
         </header>
 
         <div className="main-view">
           {tab === "onboarding" && (
-            <section className="onboarding">
+            <section className="onboarding motion-in">
               <div className="panel">
                 <h2>Find people who fit the session.</h2>
                 <p>
-                  Keep the profile practical: games, voice, hours and how you play
-                  when the match gets tense.
+                  The deck now reacts to your games, platform, voice, hours and
+                  how you play when the match gets tense.
                 </p>
               </div>
               <ChoiceBlock
                 title={t.games}
                 options={choices.games}
-                selected={selected.games}
+                selected={preferences.games}
                 onToggle={(value) => toggleChoice("games", value)}
               />
               <ChoiceBlock
                 title={t.platforms}
                 options={choices.platforms}
-                selected={selected.platforms}
+                selected={preferences.platforms}
                 onToggle={(value) => toggleChoice("platforms", value)}
               />
               <ChoiceBlock
                 title={t.style}
                 options={choices.styles}
-                selected={selected.styles}
+                selected={preferences.styles}
                 onToggle={(value) => toggleChoice("styles", value)}
               />
               <ChoiceBlock
                 title={t.voice}
                 options={choices.voice}
-                selected={selected.voice}
+                selected={preferences.voice}
                 onToggle={(value) => toggleChoice("voice", value)}
               />
               <ChoiceBlock
                 title={t.hours}
                 options={choices.hours}
-                selected={selected.hours}
+                selected={preferences.hours}
                 onToggle={(value) => toggleChoice("hours", value)}
               />
-              <button className="primary-button" onClick={() => setTab("discover")} type="button">
+              <button className="primary-button" onClick={() => updateTab("discover")} type="button">
                 {t.startMatching}
                 <ChevronRight size={18} />
               </button>
@@ -492,7 +822,7 @@ export default function Home() {
           )}
 
           {tab === "discover" && (
-            <section className="step-grid">
+            <section className="step-grid motion-in">
               {notice && <div className="match-banner">{notice}</div>}
               {currentPlayer ? (
                 <>
@@ -520,13 +850,14 @@ export default function Home() {
                   </div>
                   <button className="primary-button" onClick={() => swipe(true)} type="button">
                     <HeartHandshake size={18} />
-                    {t.accept}
+                    {currentPlayer.likedYou ? t.instantMatch : t.accept}
                   </button>
                 </>
               ) : (
                 <div className="empty-state">
                   <p>{t.noMore}</p>
                   <button className="secondary-button" onClick={resetDeck} type="button">
+                    <RotateCcw size={16} />
                     {t.resetDeck}
                   </button>
                 </div>
@@ -535,42 +866,75 @@ export default function Home() {
           )}
 
           {tab === "matches" && (
-            <section className="match-list">
-              {matches.length === 0 ? (
+            <section className="match-list motion-in">
+              {matchedPlayers.length === 0 && pendingPlayers.length === 0 ? (
                 <div className="empty-state">{t.emptyMatches}</div>
               ) : (
-                matches.map((match) => (
-                  <article className="match-item" key={match.id}>
-                    <div className="item-row">
-                      <div>
-                        <h3>{match.name}</h3>
-                        <p>{match.games.slice(0, 2).join(" / ")} · {match.active}</p>
+                <>
+                  {matchedPlayers.length > 0 && <h3 className="section-label">{t.openChats}</h3>}
+                  {matchedPlayers.map((match) => (
+                    <article className="match-item" key={match.id}>
+                      <div className="item-row">
+                        <div>
+                          <h3>{match.name}</h3>
+                          <p>{match.games.slice(0, 2).join(" / ")} / {match.active}</p>
+                        </div>
+                        <span className="status-pill">{match.score}%</span>
                       </div>
-                      <span className="status-pill">{match.compatibility}%</span>
-                    </div>
-                    <div className="chat-box">
-                      <div className="messages">
-                        {match.messages.map((message, index) => (
-                          <div className={`bubble ${message.from === "me" ? "me" : ""}`} key={index}>
-                            {message.text}
-                          </div>
+                      <div className="chat-box">
+                        <div className="messages">
+                          {match.messages.map((message, index) => (
+                            <div className={`bubble ${message.from === "me" ? "me" : ""}`} key={index}>
+                              {message.text}
+                            </div>
+                          ))}
+                        </div>
+                        <form className="composer" onSubmit={(event) => sendMessage(match.id, event)}>
+                          <input
+                            aria-label={t.typeMessage}
+                            placeholder={t.typeMessage}
+                            value={messageDrafts[match.id] ?? ""}
+                            onChange={(event) =>
+                              setMessageDrafts((current) => ({
+                                ...current,
+                                [match.id]: event.target.value
+                              }))
+                            }
+                          />
+                          <button type="submit" title={t.addMessage}>
+                            <Send size={18} />
+                          </button>
+                        </form>
+                      </div>
+                    </article>
+                  ))}
+
+                  {pendingPlayers.length > 0 && <h3 className="section-label">{t.pendingLikes}</h3>}
+                  {pendingPlayers.map((player) => (
+                    <article className="match-item pending-match" key={player.id}>
+                      <div className="item-row">
+                        <div>
+                          <h3>{player.name}</h3>
+                          <p>{player.games.slice(0, 2).join(" / ")} / {player.active}</p>
+                        </div>
+                        <span className="status-pill">{t.waiting}</span>
+                      </div>
+                      <div className="signal-list compact">
+                        {player.reasons.map((reason) => (
+                          <span className="signal" key={reason}>
+                            {reason}
+                          </span>
                         ))}
                       </div>
-                      <div className="composer">
-                        <input aria-label={t.typeMessage} placeholder={t.typeMessage} />
-                        <button type="button" title="Send">
-                          <Send size={18} />
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))
+                    </article>
+                  ))}
+                </>
               )}
             </section>
           )}
 
           {tab === "lobbies" && (
-            <section className="step-grid">
+            <section className="step-grid motion-in">
               <div className="panel">
                 <h3>{t.lobbyCreate}</h3>
                 <div className="form-grid">
@@ -656,14 +1020,16 @@ export default function Home() {
               </div>
 
               <div className="lobby-list">
-                {lobbies.length === 0 ? (
+                {scoredLobbies.length === 0 ? (
                   <div className="empty-state">{t.emptyLobbies}</div>
                 ) : (
-                  lobbies.map((lobby) => (
+                  scoredLobbies.map((lobby) => (
                     <LobbyCard
                       key={lobby.id}
                       lobby={lobby}
                       t={t}
+                      now={now}
+                      hydrated={hydrated}
                       onJoin={() => joinLobby(lobby.id)}
                       onSuccess={() => markSuccessful(lobby.id)}
                     />
@@ -679,30 +1045,120 @@ export default function Home() {
             active={tab === "onboarding"}
             icon={<Settings2 size={19} />}
             label={t.onboarding}
-            onClick={() => setTab("onboarding")}
+            onClick={() => updateTab("onboarding")}
           />
           <NavButton
             active={tab === "discover"}
             icon={<Gamepad2 size={19} />}
             label={t.discover}
-            onClick={() => setTab("discover")}
+            onClick={() => updateTab("discover")}
           />
           <NavButton
             active={tab === "matches"}
             icon={<MessageCircle size={19} />}
             label={t.matches}
-            onClick={() => setTab("matches")}
+            onClick={() => updateTab("matches")}
           />
           <NavButton
             active={tab === "lobbies"}
             icon={<Users size={19} />}
             label={t.lobbies}
-            onClick={() => setTab("lobbies")}
+            onClick={() => updateTab("lobbies")}
           />
         </nav>
       </section>
     </main>
   );
+}
+
+function scorePlayer(player: Player, preferences: UserPreferences, t: typeof copy.en): ScoredPlayer {
+  let score = 0;
+  const reasons: string[] = [];
+
+  if (hasOverlap(player.games, preferences.games)) {
+    score += 35;
+    reasons.push(t.matchReasonGame);
+  }
+
+  if (preferences.platforms.includes(player.platform) || preferences.platforms.includes("Discord")) {
+    score += 20;
+    reasons.push(t.matchReasonPlatform);
+  }
+
+  if (
+    preferences.voice.includes("Either") ||
+    preferences.voice.includes(player.voicePreference) ||
+    (preferences.voice.includes("Mic on") && player.mic)
+  ) {
+    score += 15;
+    reasons.push(t.matchReasonVoice);
+  }
+
+  if (hasOverlap(player.preferredModes, preferences.styles)) {
+    score += 20;
+    reasons.push(t.matchReasonStyle);
+  }
+
+  if (preferences.hours.includes(player.availabilityWindow)) {
+    score += 10;
+    reasons.push(t.matchReasonTime);
+  }
+
+  return {
+    ...player,
+    score: Math.min(100, score),
+    reasons: reasons.length > 0 ? reasons : [player.vibe]
+  };
+}
+
+function scoreLobby(lobby: Lobby, preferences: UserPreferences, t: typeof copy.en): ScoredLobby {
+  let fitScore = 0;
+  const fitReasons: string[] = [];
+
+  if (preferences.games.includes(lobby.game)) {
+    fitScore += 55;
+    fitReasons.push(t.matchReasonGame);
+  }
+
+  if (lobby.language === "TR/EN" || lobby.language === "EN") {
+    fitScore += 15;
+    fitReasons.push(t.language);
+  }
+
+  if (!lobby.mic || preferences.voice.includes("Mic on") || preferences.voice.includes("Either")) {
+    fitScore += 15;
+    fitReasons.push(t.matchReasonVoice);
+  }
+
+  if (preferences.styles.some((style) => lobby.mode.toLowerCase().includes(style.toLowerCase()))) {
+    fitScore += 15;
+    fitReasons.push(t.matchReasonStyle);
+  }
+
+  return {
+    ...lobby,
+    fitScore: Math.min(100, Math.max(fitScore, lobby.fitScore)),
+    fitReasons: fitReasons.length > 0 ? fitReasons : [lobby.activity]
+  };
+}
+
+function hasOverlap(left: string[], right: string[]) {
+  return left.some((item) => right.includes(item));
+}
+
+function formatSeconds(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60).toString();
+  const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function getRemainingSeconds(lobby: Lobby, now: number | null, hydrated: boolean) {
+  if (!hydrated || now === null || !lobby.readyStartedAt || lobby.status !== "ready") {
+    return lobby.expiresInSeconds;
+  }
+
+  const elapsed = Math.floor((now - lobby.readyStartedAt) / 1000);
+  return Math.max(0, lobby.expiresInSeconds - elapsed);
 }
 
 function ChoiceBlock({
@@ -735,7 +1191,7 @@ function ChoiceBlock({
   );
 }
 
-function PlayerCard({ player, t }: { player: Player; t: typeof copy.en }) {
+function PlayerCard({ player, t }: { player: ScoredPlayer; t: typeof copy.en }) {
   return (
     <article className="profile-card">
       <div className="identity-row">
@@ -746,9 +1202,12 @@ function PlayerCard({ player, t }: { player: Player; t: typeof copy.en }) {
           <h2>
             {player.name}, {player.age}
           </h2>
-          <p>{player.city}</p>
+          <p>{player.city} / {player.languages.join(", ")}</p>
         </div>
-        <span className="compat">{player.compatibility}%</span>
+        <div className="score-stack">
+          {player.likedYou && <span className="liked-you">{t.likedYou}</span>}
+          <span className="compat">{player.score}%</span>
+        </div>
       </div>
 
       <div className="tag-row">
@@ -759,7 +1218,19 @@ function PlayerCard({ player, t }: { player: Player; t: typeof copy.en }) {
         ))}
       </div>
 
-      <p>{player.bio}</p>
+      <p className="profile-bio">{player.bio}</p>
+
+      <div>
+        <span className="mini-copy">{t.whyThis}</span>
+        <div className="signal-list">
+          {player.reasons.map((reason) => (
+            <span className="signal" key={reason}>
+              <Check size={13} />
+              {reason}
+            </span>
+          ))}
+        </div>
+      </div>
 
       <div className="detail-grid">
         <Detail label={t.rank} value={player.rank} />
@@ -785,30 +1256,36 @@ function Detail({ label, value }: { label: string; value: string }) {
 function LobbyCard({
   lobby,
   t,
+  now,
+  hydrated,
   onJoin,
   onSuccess
 }: {
-  lobby: Lobby;
+  lobby: ScoredLobby;
   t: typeof copy.en;
+  now: number | null;
+  hydrated: boolean;
   onJoin: () => void;
   onSuccess: () => void;
 }) {
   const joined = lobby.members.includes("You");
   const progress = Math.round((lobby.members.length / lobby.size) * 100);
+  const remaining = getRemainingSeconds(lobby, now, hydrated);
   const label =
     lobby.status === "successful"
       ? t.closed
       : lobby.status === "ready"
         ? t.readyRoom
         : `${lobby.members.length}/${lobby.size}`;
+  const canClose = lobby.owner === "You" && lobby.status === "ready";
 
   return (
-    <article className="lobby-item">
+    <article className={`lobby-item ${lobby.status}`}>
       <div className="item-row">
         <div>
           <h3>{lobby.title}</h3>
           <p>
-            {lobby.game} · {lobby.mode} · {lobby.rank}
+            {lobby.game} / {lobby.mode} / {lobby.rank}
           </p>
         </div>
         <span className="status-pill">{label}</span>
@@ -821,18 +1298,60 @@ function LobbyCard({
           <Mic size={13} /> {lobby.mic ? "Mic" : "Text"}
         </span>
         <span className="tag">{lobby.language}</span>
+        <span className="tag">{lobby.fitScore}% {t.fit}</span>
       </div>
       <div className="progress" aria-label="Lobby progress">
         <span style={{ width: `${progress}%` }} />
       </div>
-      <p>{lobby.members.join(", ")}</p>
+      <div className="lobby-foot">
+        <p>{lobby.members.join(", ")}</p>
+        <span>{lobby.activity}</span>
+      </div>
+      <div className="signal-list compact">
+        {lobby.fitReasons.map((reason) => (
+          <span className="signal" key={reason}>
+            {reason}
+          </span>
+        ))}
+      </div>
+
+      {(lobby.status === "ready" || lobby.status === "successful") && (
+        <div className="ready-room">
+          <div className="ready-head">
+            <div>
+              <strong>{t.readyRoom}</strong>
+              <p>{t.handoffCopy}</p>
+            </div>
+            <span className="timer">
+              <Clock3 size={15} />
+              {lobby.status === "ready" ? formatSeconds(remaining) : t.successful}
+            </span>
+          </div>
+          <div className="handoff-grid">
+            <div className="handoff">
+              <span>{t.discord}</span>
+              <strong>{lobby.handoffLinks.discord}</strong>
+            </div>
+            <div className="handoff">
+              <span>{t.steam}</span>
+              <strong>{lobby.handoffLinks.steam}</strong>
+            </div>
+          </div>
+          {lobby.feedback && <div className="feedback-strip">{lobby.feedback}</div>}
+        </div>
+      )}
+
       {lobby.status === "successful" ? (
         <button className="secondary-button" disabled type="button">
           {t.successful}
         </button>
-      ) : lobby.status === "ready" || lobby.owner === "You" ? (
+      ) : canClose ? (
         <button className="primary-button" onClick={onSuccess} type="button">
           {t.markSuccessful}
+        </button>
+      ) : lobby.status === "ready" ? (
+        <button className="secondary-button" disabled type="button">
+          {t.ownerOnly}
         </button>
       ) : (
         <button
