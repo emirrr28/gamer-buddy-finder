@@ -110,17 +110,17 @@ const READY_ROOM_SECONDS = 90;
 const copy = {
   en: {
     railTitle: "Queue",
-    railText: "A cleaner way to find people for the games that get better with a squad.",
+    railText: "Swipe into people who make the next match worth queueing for.",
     activeRooms: "live rooms",
     matchesToday: "matches today",
     onboarding: "Profile",
     discover: "Discover",
     matches: "Matches",
     lobbies: "Lobbies",
-    onboardingKicker: "Your choices now change who rises to the top.",
-    discoverKicker: "Compatibility is based on your actual queue habits.",
-    matchesKicker: "Mutual interest becomes a useful chat.",
-    lobbiesKicker: "Short-lived rooms for tonight's queue.",
+    onboardingKicker: "Tune the deck before the night starts.",
+    discoverKicker: "Player cards ranked by games, comms and session energy.",
+    matchesKicker: "Mutual interest turns into a short game plan.",
+    lobbiesKicker: "Rooms built to fill fast and move off-app.",
     games: "Games",
     platforms: "Platforms",
     style: "Play style",
@@ -128,7 +128,7 @@ const copy = {
     hours: "Active hours",
     startMatching: "Start matching",
     reject: "Pass",
-    accept: "Queue up",
+    accept: "Like",
     matched: "Match opened. Chat is ready.",
     pending: "Like sent. Waiting on their swipe.",
     passed: "Passed. The deck moved on.",
@@ -155,7 +155,7 @@ const copy = {
     language: "Language",
     create: "Create",
     lobbyTitle: "Lobby title",
-    emptyMatches: "Swipe right on a compatible player to open a chat.",
+    emptyMatches: "Like a compatible player to open a chat.",
     emptyLobbies: "No open lobbies yet.",
     matchReasonGame: "shared game",
     matchReasonPlatform: "same platform",
@@ -177,7 +177,7 @@ const copy = {
     addMessage: "Send",
     lobbyActivity: "Activity",
     whyThis: "Why this match",
-    handoffCopy: "Add each other, pick voice, then leave the app cleanly.",
+    handoffCopy: "Add each other, pick voice, then drop into the session.",
     saved: "Saved locally"
   },
   tr: {
@@ -721,7 +721,7 @@ export default function Home() {
   }
 
   return (
-    <main className="app-frame">
+    <main className="app-frame" data-theme="ranked-social">
       <aside className="brand-rail" aria-label="Product">
         <div>
           <span className="brand-mark">Q</span>
@@ -778,10 +778,10 @@ export default function Home() {
           {tab === "onboarding" && (
             <section className="onboarding motion-in">
               <div className="panel">
-                <h2>Find people who fit the session.</h2>
+                <h2>Build tonight&apos;s player deck.</h2>
                 <p>
-                  The deck now reacts to your games, platform, voice, hours and
-                  how you play when the match gets tense.
+                  Your stack, voice style and active hours shape who appears first.
+                  Keep it sharp now, swipe faster later.
                 </p>
               </div>
               <ChoiceBlock
@@ -1194,6 +1194,7 @@ function ChoiceBlock({
 function PlayerCard({ player, t }: { player: ScoredPlayer; t: typeof copy.en }) {
   return (
     <article className="profile-card">
+      <div className="card-sheen" />
       <div className="identity-row">
         <div className="identity">
           <div className="avatar" style={{ background: player.accent }}>
@@ -1206,8 +1207,14 @@ function PlayerCard({ player, t }: { player: ScoredPlayer; t: typeof copy.en }) 
         </div>
         <div className="score-stack">
           {player.likedYou && <span className="liked-you">{t.likedYou}</span>}
-          <span className="compat">{player.score}%</span>
+          <span className="compat">{player.score}% match</span>
         </div>
+      </div>
+
+      <div className="persona-strip">
+        <span>{player.vibe}</span>
+        <span>{player.rank}</span>
+        <span>{player.active}</span>
       </div>
 
       <div className="tag-row">
@@ -1232,7 +1239,7 @@ function PlayerCard({ player, t }: { player: ScoredPlayer; t: typeof copy.en }) 
         </div>
       </div>
 
-      <div className="detail-grid">
+      <div className="detail-grid card-details">
         <Detail label={t.rank} value={player.rank} />
         <Detail label={t.platform} value={player.platform} />
         <Detail label={t.active} value={player.active} />
