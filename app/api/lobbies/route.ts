@@ -4,6 +4,11 @@ import { prisma } from "../../lib/prisma";
 
 export async function GET() {
   const lobbies = await prisma.lobby.findMany({
+    where: {
+      expiresAt: {
+        gt: new Date()
+      }
+    },
     orderBy: { createdAt: "desc" }
   });
 
@@ -50,10 +55,18 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Lobby not found" }, { status: 404 });
   }
 
+  if (lobby.expiresAt <= new Date()) {
+    return NextResponse.json({ error: "This lobby has expired" }, { status: 410 });
+  }
+
+  if (lobby.currentPlayers >= lobby.maxPlayers) {
+    return NextResponse.json({ error: "This lobby is full" }, { status: 409 });
+  }
+
   const updatedLobby = await prisma.lobby.update({
     where: { id: body.id },
     data: {
-      currentPlayers: Math.min(lobby.currentPlayers + 1, lobby.maxPlayers)
+      currentPlayers: lobby.currentPlayers + 1
     }
   });
 

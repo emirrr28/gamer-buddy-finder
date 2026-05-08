@@ -398,6 +398,7 @@ export default function Home() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [notice, setNotice] = useState("");
+  const [lobbyError, setLobbyError] = useState("");
   const [draftLobby, setDraftLobby] = useState({
     title: "Tonight ranked stack",
     game: "CS2",
@@ -410,10 +411,18 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [now, setNow] = useState<number | null>(null);
 
-  async function loadLobbies() {
+  async function loadLobbies(clearError = true) {
     const response = await fetch("/api/lobbies");
+    if (!response.ok) {
+      setLobbyError(await getApiError(response));
+      return;
+    }
+
     const records = (await response.json()) as DbLobby[];
     setLobbies(records.map(mapDbLobby));
+    if (clearError) {
+      setLobbyError("");
+    }
   }
 
   /* eslint-disable react-hooks/set-state-in-effect -- localStorage hydration syncs client-only state after mount. */
@@ -587,6 +596,7 @@ export default function Home() {
     setMessageDrafts({});
     void loadLobbies();
     setNotice("");
+    setLobbyError("");
     setNow(timestamp);
     window.localStorage.removeItem(STORAGE_KEY);
   }
@@ -604,8 +614,13 @@ export default function Home() {
       })
     });
 
-    const record = (await response.json()) as DbLobby;
-    setLobbies((current) => [mapDbLobby(record), ...current]);
+    if (!response.ok) {
+      setLobbyError(await getApiError(response));
+      return;
+    }
+
+    setLobbyError("");
+    await loadLobbies();
   }
 
   async function joinLobby(id: number) {
@@ -615,18 +630,14 @@ export default function Home() {
       body: JSON.stringify({ id, action: "join" })
     });
 
-    const record = (await response.json()) as DbLobby;
-    setLobbies((current) =>
-      current.map((lobby) => {
-        if (lobby.id !== id) return lobby;
+    if (!response.ok) {
+      setLobbyError(await getApiError(response));
+      await loadLobbies(false);
+      return;
+    }
 
-        const nextLobby = mapDbLobby(record);
-        return {
-          ...nextLobby,
-          members: nextLobby.members.includes("You") ? nextLobby.members : [...nextLobby.members, "You"]
-        };
-      })
-    );
+    setLobbyError("");
+    await loadLobbies();
   }
 
   function markSuccessful(id: number) {
@@ -873,6 +884,7 @@ export default function Home() {
 
           {tab === "lobbies" && (
             <section className="step-grid motion-in">
+              {lobbyError && <div className="match-banner">{lobbyError}</div>}
               <div className="panel">
                 <h3>{t.lobbyCreate}</h3>
                 <div className="form-grid">
@@ -1082,6 +1094,15 @@ function scoreLobby(lobby: Lobby, preferences: UserPreferences, t: typeof copy.e
 
 function hasOverlap(left: string[], right: string[]) {
   return left.some((item) => right.includes(item));
+}
+
+async function getApiError(response: Response) {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? "Lobby action failed. Try again.";
+  } catch {
+    return "Lobby action failed. Try again.";
+  }
 }
 
 function mapDbLobby(record: DbLobby): Lobby {
