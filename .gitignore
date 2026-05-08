@@ -10,6 +10,8 @@ build/
 .tools/
 $tools/
 .codex/
+prisma/dev.db
+prisma/dev.db-journal
 
 npm-debug.log*
 yarn-debug.log*

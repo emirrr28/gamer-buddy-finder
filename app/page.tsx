@@ -90,6 +90,18 @@ type Lobby = {
   feedback?: string;
 };
 
+type DbLobby = {
+  id: number;
+  mode: string;
+  region: string;
+  micRequired: boolean;
+  maxPlayers: number;
+  currentPlayers: number;
+  note: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
 type ScoredLobby = Lobby & {
   fitScore: number;
   fitReasons: string[];
@@ -101,7 +113,6 @@ type PersistedState = {
   preferences: UserPreferences;
   decisions: Record<number, Decision>;
   matches: Match[];
-  lobbies: Lobby[];
 };
 
 const STORAGE_KEY = "queue.productLoop.v2";
@@ -378,79 +389,6 @@ const players: Player[] = [
   }
 ];
 
-function makeInitialLobbies(now: number): Lobby[] {
-  return [
-    {
-      id: 101,
-      title: "Clean CS2 five-stack",
-      game: "CS2",
-      mode: "Premier",
-      rank: "Gold Nova - MG",
-      language: "TR/EN",
-      mic: true,
-      owner: "Deniz",
-      size: 5,
-      members: ["Deniz", "Mira", "Ece"],
-      status: "open",
-      createdAt: now - 12 * 60 * 1000,
-      readyStartedAt: null,
-      expiresInSeconds: READY_ROOM_SECONDS,
-      handoffLinks: {
-        discord: "discord.gg/clean-stack",
-        steam: "steamcommunity.com/groups/cleanstack"
-      },
-      activity: "Needs two stable riflers",
-      fitScore: 0
-    },
-    {
-      id: 102,
-      title: "Valorant late queue",
-      game: "Valorant",
-      mode: "Ranked",
-      rank: "Diamond - Ascendant",
-      language: "EN",
-      mic: true,
-      owner: "Mira",
-      size: 5,
-      members: ["Mira", "Noah", "Kai", "Jules"],
-      status: "open",
-      createdAt: now - 7 * 60 * 1000,
-      readyStartedAt: null,
-      expiresInSeconds: READY_ROOM_SECONDS,
-      handoffLinks: {
-        discord: "discord.gg/late-queue",
-        steam: "riot id: mira#queue"
-      },
-      activity: "One flex player for ranked",
-      fitScore: 0
-    },
-    {
-      id: 103,
-      title: "Helldivers quick run",
-      game: "Helldivers 2",
-      mode: "Suicide Mission",
-      rank: "Any",
-      language: "TR",
-      mic: false,
-      owner: "You",
-      size: 4,
-      members: ["You", "Aras", "Selin", "Can"],
-      status: "ready",
-      createdAt: now - 4 * 60 * 1000,
-      readyStartedAt: now - 22 * 1000,
-      expiresInSeconds: READY_ROOM_SECONDS,
-      handoffLinks: {
-        discord: "discord.gg/drop-now",
-        steam: "steam friend code: 8842-1190"
-      },
-      activity: "Squad is ready to jump",
-      fitScore: 0
-    }
-  ];
-}
-
-const emptyLobbies = makeInitialLobbies(0);
-
 export default function Home() {
   const [language, setLanguage] = useState<Language>("en");
   const t = copy[language];
@@ -458,7 +396,7 @@ export default function Home() {
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
   const [decisions, setDecisions] = useState<Record<number, Decision>>({});
   const [matches, setMatches] = useState<Match[]>([]);
-  const [lobbies, setLobbies] = useState<Lobby[]>(emptyLobbies);
+  const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [notice, setNotice] = useState("");
   const [draftLobby, setDraftLobby] = useState({
     title: "Tonight ranked stack",
@@ -472,10 +410,14 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [now, setNow] = useState<number | null>(null);
 
+  async function loadLobbies() {
+    const response = await fetch("/api/lobbies");
+    const records = (await response.json()) as DbLobby[];
+    setLobbies(records.map(mapDbLobby));
+  }
+
   /* eslint-disable react-hooks/set-state-in-effect -- localStorage hydration syncs client-only state after mount. */
   useEffect(() => {
-    const timestamp = Date.now();
-
     try {
       const stored = window.localStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -485,16 +427,21 @@ export default function Home() {
         setPreferences(parsed.preferences ?? defaultPreferences);
         setDecisions(parsed.decisions ?? {});
         setMatches(parsed.matches ?? []);
-        setLobbies(parsed.lobbies ?? makeInitialLobbies(timestamp));
-      } else {
-        setLobbies(makeInitialLobbies(timestamp));
       }
     } catch {
-      setLobbies(makeInitialLobbies(timestamp));
+      setPreferences(defaultPreferences);
     }
 
     setHydrated(true);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  /* eslint-disable react-hooks/set-state-in-effect -- API hydration fills client lobby state after mount. */
+  useEffect(() => {
+    if (!hydrated) return;
+
+    void loadLobbies();
+  }, [hydrated]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -512,11 +459,10 @@ export default function Home() {
       tab,
       preferences,
       decisions,
-      matches,
-      lobbies
+      matches
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [decisions, hydrated, language, lobbies, matches, preferences, tab]);
+  }, [decisions, hydrated, language, matches, preferences, tab]);
 
   const scoredPlayers = useMemo(
     () =>
@@ -639,53 +585,45 @@ export default function Home() {
     setDecisions({});
     setMatches([]);
     setMessageDrafts({});
-    setLobbies(makeInitialLobbies(timestamp));
+    void loadLobbies();
     setNotice("");
     setNow(timestamp);
     window.localStorage.removeItem(STORAGE_KEY);
   }
 
-  function createLobby() {
-    const timestamp = now ?? 1;
-    const nextLobby: Lobby = {
-      id: timestamp,
-      title: draftLobby.title.trim() || "Tonight ranked stack",
-      game: draftLobby.game,
-      mode: draftLobby.mode.trim() || "Ranked",
-      rank: draftLobby.rank.trim() || "Any",
-      language: draftLobby.language,
-      mic: preferences.voice.includes("Mic on"),
-      owner: "You",
-      size: Number(draftLobby.size),
-      members: ["You"],
-      status: Number(draftLobby.size) === 1 ? "ready" : "open",
-      createdAt: timestamp,
-      readyStartedAt: Number(draftLobby.size) === 1 ? timestamp : null,
-      expiresInSeconds: READY_ROOM_SECONDS,
-      handoffLinks: {
-        discord: "discord.gg/your-room",
-        steam: "steam friend code: add-yours"
-      },
-      activity: "Owner is holding the room",
-      fitScore: 100
-    };
-    setLobbies((current) => [nextLobby, ...current]);
+  async function createLobby() {
+    const response = await fetch("/api/lobbies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: `${draftLobby.game} ${draftLobby.mode}`.trim(),
+        region: draftLobby.language,
+        micRequired: preferences.voice.includes("Mic on"),
+        maxPlayers: Number(draftLobby.size),
+        note: draftLobby.title.trim() || "Tonight ranked stack"
+      })
+    });
+
+    const record = (await response.json()) as DbLobby;
+    setLobbies((current) => [mapDbLobby(record), ...current]);
   }
 
-  function joinLobby(id: number) {
-    const timestamp = now ?? 1;
+  async function joinLobby(id: number) {
+    const response = await fetch("/api/lobbies", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action: "join" })
+    });
+
+    const record = (await response.json()) as DbLobby;
     setLobbies((current) =>
       current.map((lobby) => {
-        if (lobby.id !== id || lobby.members.includes("You") || lobby.status === "successful") {
-          return lobby;
-        }
-        const members = [...lobby.members, "You"];
-        const isReady = members.length >= lobby.size;
+        if (lobby.id !== id) return lobby;
+
+        const nextLobby = mapDbLobby(record);
         return {
-          ...lobby,
-          members,
-          status: isReady ? "ready" : "open",
-          readyStartedAt: isReady ? timestamp : lobby.readyStartedAt
+          ...nextLobby,
+          members: nextLobby.members.includes("You") ? nextLobby.members : [...nextLobby.members, "You"]
         };
       })
     );
@@ -1144,6 +1082,55 @@ function scoreLobby(lobby: Lobby, preferences: UserPreferences, t: typeof copy.e
 
 function hasOverlap(left: string[], right: string[]) {
   return left.some((item) => right.includes(item));
+}
+
+function mapDbLobby(record: DbLobby): Lobby {
+  const createdAt = new Date(record.createdAt).getTime();
+  const expiresAt = new Date(record.expiresAt).getTime();
+  const status = record.currentPlayers >= record.maxPlayers ? "ready" : "open";
+  const game = inferGame(record.mode);
+  const members = Array.from({ length: record.currentPlayers }, (_, index) =>
+    index === 0 ? "Host" : `Player ${index + 1}`
+  );
+
+  return {
+    id: record.id,
+    title: record.note,
+    game,
+    mode: record.mode,
+    rank: record.region,
+    language: record.region,
+    mic: record.micRequired,
+    owner: "Host",
+    size: record.maxPlayers,
+    members,
+    status,
+    createdAt,
+    readyStartedAt: status === "ready" ? Date.now() : null,
+    expiresInSeconds: Math.max(READY_ROOM_SECONDS, Math.round((expiresAt - Date.now()) / 1000)),
+    handoffLinks: {
+      discord: `discord.gg/lobby-${record.id}`,
+      steam: `steam lobby #${record.id}`
+    },
+    activity:
+      status === "ready"
+        ? "Squad is ready to move off-app"
+        : `Needs ${record.maxPlayers - record.currentPlayers} more player${
+            record.maxPlayers - record.currentPlayers === 1 ? "" : "s"
+          }`,
+    fitScore: 0
+  };
+}
+
+function inferGame(mode: string) {
+  const normalized = mode.toLowerCase();
+  if (normalized.includes("valorant")) return "Valorant";
+  if (normalized.includes("cs")) return "CS2";
+  if (normalized.includes("helldivers")) return "Helldivers 2";
+  if (normalized.includes("league")) return "League";
+  if (normalized.includes("apex")) return "Apex";
+  if (normalized.includes("dota")) return "Dota 2";
+  return mode.split(" ")[0] || "Lobby";
 }
 
 function formatSeconds(totalSeconds: number) {
