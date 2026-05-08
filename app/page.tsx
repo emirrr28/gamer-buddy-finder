@@ -84,6 +84,7 @@ type Lobby = {
   createdAt: number;
   readyStartedAt: number | null;
   expiresInSeconds: number;
+  expiresAt: number;
   handoffLinks: HandoffLinks;
   activity: string;
   fitScore: number;
@@ -399,6 +400,8 @@ export default function Home() {
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [notice, setNotice] = useState("");
   const [lobbyError, setLobbyError] = useState("");
+  const [creatingLobby, setCreatingLobby] = useState(false);
+  const [joiningLobbyId, setJoiningLobbyId] = useState<number | null>(null);
   const [draftLobby, setDraftLobby] = useState({
     title: "Tonight ranked stack",
     game: "CS2",
@@ -602,42 +605,56 @@ export default function Home() {
   }
 
   async function createLobby() {
-    const response = await fetch("/api/lobbies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: `${draftLobby.game} ${draftLobby.mode}`.trim(),
-        region: draftLobby.language,
-        micRequired: preferences.voice.includes("Mic on"),
-        maxPlayers: Number(draftLobby.size),
-        note: draftLobby.title.trim() || "Tonight ranked stack"
-      })
-    });
+    if (creatingLobby) return;
 
-    if (!response.ok) {
-      setLobbyError(await getApiError(response));
-      return;
+    setCreatingLobby(true);
+    try {
+      const response = await fetch("/api/lobbies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: `${draftLobby.game} ${draftLobby.mode}`.trim(),
+          region: draftLobby.language,
+          micRequired: preferences.voice.includes("Mic on"),
+          maxPlayers: Number(draftLobby.size),
+          note: draftLobby.title.trim() || "Tonight ranked stack"
+        })
+      });
+
+      if (!response.ok) {
+        setLobbyError(await getApiError(response));
+        return;
+      }
+
+      setLobbyError("");
+      await loadLobbies();
+    } finally {
+      setCreatingLobby(false);
     }
-
-    setLobbyError("");
-    await loadLobbies();
   }
 
   async function joinLobby(id: number) {
-    const response = await fetch("/api/lobbies", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action: "join" })
-    });
+    if (joiningLobbyId !== null) return;
 
-    if (!response.ok) {
-      setLobbyError(await getApiError(response));
-      await loadLobbies(false);
-      return;
+    setJoiningLobbyId(id);
+    try {
+      const response = await fetch("/api/lobbies", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "join" })
+      });
+
+      if (!response.ok) {
+        setLobbyError(await getApiError(response));
+        await loadLobbies(false);
+        return;
+      }
+
+      setLobbyError("");
+      await loadLobbies();
+    } finally {
+      setJoiningLobbyId(null);
     }
-
-    setLobbyError("");
-    await loadLobbies();
   }
 
   function markSuccessful(id: number) {
@@ -963,9 +980,14 @@ export default function Home() {
                     </select>
                   </label>
                 </div>
-                <button className="primary-button" onClick={createLobby} type="button">
+                <button
+                  className="primary-button"
+                  disabled={creatingLobby}
+                  onClick={createLobby}
+                  type="button"
+                >
                   <Plus size={18} />
-                  {t.create}
+                  {creatingLobby ? "Oluşturuluyor..." : t.create}
                 </button>
               </div>
 
@@ -980,6 +1002,7 @@ export default function Home() {
                       t={t}
                       now={now}
                       hydrated={hydrated}
+                      joining={joiningLobbyId === lobby.id}
                       onJoin={() => joinLobby(lobby.id)}
                       onSuccess={() => markSuccessful(lobby.id)}
                     />
@@ -1099,9 +1122,9 @@ function hasOverlap(left: string[], right: string[]) {
 async function getApiError(response: Response) {
   try {
     const body = (await response.json()) as { error?: string };
-    return body.error ?? "Lobby action failed. Try again.";
+    return body.error ?? "Lobi işlemi başarısız oldu. Tekrar dene.";
   } catch {
-    return "Lobby action failed. Try again.";
+    return "Lobi işlemi başarısız oldu. Tekrar dene.";
   }
 }
 
@@ -1129,6 +1152,7 @@ function mapDbLobby(record: DbLobby): Lobby {
     createdAt,
     readyStartedAt: status === "ready" ? Date.now() : null,
     expiresInSeconds: Math.max(READY_ROOM_SECONDS, Math.round((expiresAt - Date.now()) / 1000)),
+    expiresAt,
     handoffLinks: {
       discord: `discord.gg/lobby-${record.id}`,
       steam: `steam lobby #${record.id}`
@@ -1273,6 +1297,7 @@ function LobbyCard({
   t,
   now,
   hydrated,
+  joining,
   onJoin,
   onSuccess
 }: {
@@ -1280,12 +1305,15 @@ function LobbyCard({
   t: typeof copy.en;
   now: number | null;
   hydrated: boolean;
+  joining: boolean;
   onJoin: () => void;
   onSuccess: () => void;
 }) {
   const joined = lobby.members.includes("You");
   const progress = Math.round((lobby.members.length / lobby.size) * 100);
   const remaining = getRemainingSeconds(lobby, now, hydrated);
+  const isFull = lobby.members.length >= lobby.size;
+  const isExpired = hydrated && now !== null && lobby.expiresAt <= now;
   const label =
     lobby.status === "successful"
       ? t.closed
@@ -1293,6 +1321,16 @@ function LobbyCard({
         ? t.readyRoom
         : `${lobby.members.length}/${lobby.size}`;
   const canClose = lobby.owner === "You" && lobby.status === "ready";
+  const joinDisabled = joined || isFull || isExpired || joining;
+  const joinLabel = joining
+    ? "Katılınıyor..."
+    : joined
+      ? t.joined
+      : isExpired
+        ? "Süresi doldu"
+        : isFull
+          ? "Lobi dolu"
+          : t.join;
 
   return (
     <article className={`lobby-item ${lobby.status}`}>
@@ -1370,12 +1408,12 @@ function LobbyCard({
         </button>
       ) : (
         <button
-          className={joined ? "secondary-button" : "primary-button"}
-          disabled={joined}
+          className={joinDisabled ? "secondary-button" : "primary-button"}
+          disabled={joinDisabled}
           onClick={onJoin}
           type="button"
         >
-          {joined ? t.joined : t.join}
+          {joinLabel}
         </button>
       )}
     </article>
