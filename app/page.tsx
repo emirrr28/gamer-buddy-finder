@@ -117,9 +117,14 @@ type ScoredLobby = Lobby & {
 type PersistedState = {
   language: Language;
   tab: Tab;
-  preferences: UserPreferences;
   decisions: Record<number, Decision>;
   matches: Match[];
+};
+
+type MeResponse = {
+  id: number;
+  displayName: string;
+  preferences: UserPreferences;
 };
 
 const STORAGE_KEY = "queue.productLoop.v2";
@@ -406,6 +411,8 @@ export default function Home() {
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [notice, setNotice] = useState("");
   const [lobbyError, setLobbyError] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
   const [creatingLobby, setCreatingLobby] = useState(false);
   const [joiningLobbyId, setJoiningLobbyId] = useState<number | null>(null);
   const [draftLobby, setDraftLobby] = useState({
@@ -434,6 +441,18 @@ export default function Home() {
     }
   }
 
+  async function loadMe() {
+    const response = await fetch("/api/me");
+    if (!response.ok) {
+      setProfileError(await getApiError(response));
+      return;
+    }
+
+    const record = (await response.json()) as MeResponse;
+    setPreferences(record.preferences);
+    setProfileError("");
+  }
+
   /* eslint-disable react-hooks/set-state-in-effect -- localStorage hydration syncs client-only state after mount. */
   useEffect(() => {
     try {
@@ -442,12 +461,11 @@ export default function Home() {
         const parsed = JSON.parse(stored) as Partial<PersistedState>;
         setLanguage(parsed.language ?? "en");
         setTab(parsed.tab ?? "onboarding");
-        setPreferences(parsed.preferences ?? defaultPreferences);
         setDecisions(parsed.decisions ?? {});
         setMatches(parsed.matches ?? []);
       }
     } catch {
-      setPreferences(defaultPreferences);
+      window.localStorage.removeItem(STORAGE_KEY);
     }
 
     setHydrated(true);
@@ -459,6 +477,7 @@ export default function Home() {
     if (!hydrated) return;
 
     void loadLobbies();
+    void loadMe();
   }, [hydrated]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -475,12 +494,11 @@ export default function Home() {
     const payload: PersistedState = {
       language,
       tab,
-      preferences,
       decisions,
       matches
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [decisions, hydrated, language, matches, preferences, tab]);
+  }, [decisions, hydrated, language, matches, tab]);
 
   const scoredPlayers = useMemo(
     () =>
@@ -599,15 +617,41 @@ export default function Home() {
     const timestamp = now ?? 1;
     setLanguage("en");
     setTab("onboarding");
-    setPreferences(defaultPreferences);
     setDecisions({});
     setMatches([]);
     setMessageDrafts({});
     void loadLobbies();
+    void loadMe();
     setNotice("");
     setLobbyError("");
+    setProfileError("");
     setNow(timestamp);
     window.localStorage.removeItem(STORAGE_KEY);
+  }
+
+  async function saveProfileAndStart() {
+    if (profileSaving) return;
+
+    setProfileSaving(true);
+    try {
+      const response = await fetch("/api/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(preferences)
+      });
+
+      if (!response.ok) {
+        setProfileError(await getApiError(response));
+        return;
+      }
+
+      const record = (await response.json()) as MeResponse;
+      setPreferences(record.preferences);
+      setProfileError("");
+      updateTab("discover");
+    } finally {
+      setProfileSaving(false);
+    }
   }
 
   async function createLobby() {
@@ -749,6 +793,7 @@ export default function Home() {
         <div className="main-view">
           {tab === "onboarding" && (
             <section className="onboarding motion-in">
+              {profileError && <div className="match-banner">{profileError}</div>}
               <div className="panel">
                 <h2>Build tonight&apos;s player deck.</h2>
                 <p>
@@ -786,8 +831,13 @@ export default function Home() {
                 selected={preferences.hours}
                 onToggle={(value) => toggleChoice("hours", value)}
               />
-              <button className="primary-button" onClick={() => updateTab("discover")} type="button">
-                {t.startMatching}
+              <button
+                className="primary-button"
+                disabled={profileSaving}
+                onClick={saveProfileAndStart}
+                type="button"
+              >
+                {profileSaving ? (language === "tr" ? "Kaydediliyor..." : "Saving...") : t.startMatching}
                 <ChevronRight size={18} />
               </button>
             </section>

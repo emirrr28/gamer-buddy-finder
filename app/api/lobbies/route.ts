@@ -1,17 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getDemoUserId } from "../../lib/demo-user";
 import { prisma } from "../../lib/prisma";
-
-const DEMO_USER_EMAIL = "you@queue.local";
-
-async function getDemoUserId() {
-  const demoUser = await prisma.user.findUnique({
-    where: { email: DEMO_USER_EMAIL },
-    select: { id: true }
-  });
-
-  return demoUser?.id ?? null;
-}
 
 export async function GET() {
   const lobbies = await prisma.lobby.findMany({
