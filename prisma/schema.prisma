@@ -7,14 +7,144 @@ datasource db {
   url      = "file:./dev.db"
 }
 
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  displayName  String
+  role         String        @default("USER")
+  status       String        @default("ACTIVE")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  profile      Profile?
+  games        UserGame[]
+  ownedLobbies Lobby[]       @relation("LobbyOwner")
+  lobbyMembers LobbyMember[]
+  sentSwipes   Swipe[]       @relation("SwipeFrom")
+  receivedSwipes Swipe[]     @relation("SwipeTo")
+  sentMessages Message[]
+  reportsMade  Report[]      @relation("ReportFrom")
+  reportsGot   Report[]      @relation("ReportTo")
+  blocksMade   Block[]       @relation("BlockFrom")
+  blocksGot    Block[]       @relation("BlockTo")
+}
+
+model Profile {
+  id                 Int      @id @default(autoincrement())
+  userId             Int      @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio                String
+  region             String
+  languages          String
+  platforms          String
+  playStyles         String
+  voicePreference    String
+  availabilityWindow String
+  rankLabel          String
+  isVisible          Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+}
+
+model Game {
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  slug      String     @unique
+  createdAt DateTime   @default(now())
+  users     UserGame[]
+}
+
+model UserGame {
+  id        Int     @id @default(autoincrement())
+  userId    Int
+  gameId    Int
+  rank      String?
+  isPrimary Boolean @default(false)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game      Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gameId])
+}
+
+model Swipe {
+  id        Int      @id @default(autoincrement())
+  fromUserId Int
+  toUserId   Int
+  decision  String
+  createdAt DateTime @default(now())
+  fromUser  User     @relation("SwipeFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser    User     @relation("SwipeTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+}
+
+model Match {
+  id        Int       @id @default(autoincrement())
+  userAId   Int
+  userBId   Int
+  createdAt DateTime  @default(now())
+  messages  Message[]
+
+  @@unique([userAId, userBId])
+}
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  matchId   Int
+  senderId  Int
+  text      String
+  createdAt DateTime @default(now())
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+}
+
 model Lobby {
-  id             Int      @id @default(autoincrement())
+  id             Int           @id @default(autoincrement())
+  ownerId        Int?
+  owner          User?         @relation("LobbyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   mode           String
   region         String
-  micRequired    Boolean  @default(true)
+  micRequired    Boolean       @default(true)
   maxPlayers     Int
-  currentPlayers Int      @default(1)
+  currentPlayers Int           @default(1)
   note           String
-  createdAt      DateTime @default(now())
+  status         String        @default("OPEN")
+  createdAt      DateTime      @default(now())
   expiresAt      DateTime
+  closedAt       DateTime?
+  successfulAt   DateTime?
+  members        LobbyMember[]
+}
+
+model LobbyMember {
+  id        Int      @id @default(autoincrement())
+  lobbyId   Int
+  userId    Int?
+  label     String
+  joinedAt  DateTime @default(now())
+  lobby     Lobby    @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([lobbyId, userId])
+}
+
+model Report {
+  id             Int      @id @default(autoincrement())
+  reporterUserId Int
+  reportedUserId Int
+  reason         String
+  details        String?
+  status         String   @default("OPEN")
+  createdAt      DateTime @default(now())
+  reporter       User     @relation("ReportFrom", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reported       User     @relation("ReportTo", fields: [reportedUserId], references: [id], onDelete: Cascade)
+}
+
+model Block {
+  id            Int      @id @default(autoincrement())
+  blockerUserId Int
+  blockedUserId Int
+  createdAt     DateTime @default(now())
+  blocker       User     @relation("BlockFrom", fields: [blockerUserId], references: [id], onDelete: Cascade)
+  blocked       User     @relation("BlockTo", fields: [blockedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerUserId, blockedUserId])
 }

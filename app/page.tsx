@@ -93,6 +93,9 @@ type Lobby = {
 
 type DbLobby = {
   id: number;
+  owner?: {
+    displayName: string;
+  } | null;
   mode: string;
   region: string;
   micRequired: boolean;
@@ -101,6 +104,9 @@ type DbLobby = {
   note: string;
   createdAt: string;
   expiresAt: string;
+  members?: {
+    label: string;
+  }[];
 };
 
 type ScoredLobby = Lobby & {
@@ -1133,9 +1139,12 @@ function mapDbLobby(record: DbLobby): Lobby {
   const expiresAt = new Date(record.expiresAt).getTime();
   const status = record.currentPlayers >= record.maxPlayers ? "ready" : "open";
   const game = inferGame(record.mode);
-  const members = Array.from({ length: record.currentPlayers }, (_, index) =>
-    index === 0 ? "Host" : `Player ${index + 1}`
-  );
+  const members =
+    record.members && record.members.length > 0
+      ? record.members.map((member) => member.label)
+      : Array.from({ length: record.currentPlayers }, (_, index) =>
+          index === 0 ? "Host" : `Player ${index + 1}`
+        );
 
   return {
     id: record.id,
@@ -1145,7 +1154,7 @@ function mapDbLobby(record: DbLobby): Lobby {
     rank: record.region,
     language: record.region,
     mic: record.micRequired,
-    owner: "Host",
+    owner: record.owner?.displayName ?? members[0] ?? "Host",
     size: record.maxPlayers,
     members,
     status,
