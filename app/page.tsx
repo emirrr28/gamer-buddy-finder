@@ -1329,7 +1329,7 @@ function LobbyCard({
       : isExpired
         ? "Süresi doldu"
         : isFull
-          ? "Lobi dolu"
+          ? "Dolu"
           : t.join;
 
   return (
@@ -1401,6 +1401,10 @@ function LobbyCard({
       ) : canClose ? (
         <button className="primary-button" onClick={onSuccess} type="button">
           {t.markSuccessful}
+        </button>
+      ) : isFull ? (
+        <button className="secondary-button" disabled type="button">
+          Dolu
         </button>
       ) : lobby.status === "ready" ? (
         <button className="secondary-button" disabled type="button">

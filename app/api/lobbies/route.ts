@@ -46,17 +46,17 @@ export async function PATCH(request: Request) {
   };
 
   if (!body.id || body.action !== "join") {
-    return NextResponse.json({ error: "Geçersiz lobi isteği." }, { status: 400 });
+    return NextResponse.json({ error: "Gecersiz lobi istegi." }, { status: 400 });
   }
 
   const lobby = await prisma.lobby.findUnique({ where: { id: body.id } });
 
   if (!lobby) {
-    return NextResponse.json({ error: "Lobi bulunamadı." }, { status: 404 });
+    return NextResponse.json({ error: "Lobi bulunamadi." }, { status: 404 });
   }
 
   if (lobby.expiresAt <= new Date()) {
-    return NextResponse.json({ error: "Bu lobinin süresi doldu." }, { status: 410 });
+    return NextResponse.json({ error: "Bu lobinin suresi doldu." }, { status: 410 });
   }
 
   if (lobby.currentPlayers >= lobby.maxPlayers) {
